@@ -12,6 +12,7 @@ AC_CANONICAL_HOST
 AC_SYS_LARGEFILE
 AC_CHECK_HEADERS([uuid/uuid.h], [], [Need uuid-dev])
 AC_CHECK_HEADERS([libaio.h], [], [Need libaio-dev])
+AC_CHECK_HEADERS([xseg/xseg.h], [], [Need libxseg-dev])
 
 AC_ARG_WITH([libiconv],
 	     [AS_HELP_STRING([--with-libiconv],
