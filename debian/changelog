@@ -1,0 +1,11 @@
+blktap (2.0.90-2) unstable; urgency=low
+
+  * Add Archipelago support
+
+ -- Chrysostomos Nanakos <chris@grnet.gr>  Mon, 23 Dec 2013 15:52:08 +0000
+
+blktap (2.0.90-1) unstable; urgency=low
+
+  * Initial release. (Closes: #635115)
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 21 Jul 2011 17:08:44 +0000
