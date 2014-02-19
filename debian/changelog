@@ -1,8 +1,12 @@
 blktap (2.0.90-2) unstable; urgency=low
 
   * Add Archipelago support
+  * Update debian/control
+        - Update to S-V 3.9.5
+  * Lintian cleaning
+  * Add devflow support
 
- -- Chrysostomos Nanakos <chris@grnet.gr>  Mon, 23 Dec 2013 15:52:08 +0000
+ -- Chrysostomos Nanakos <cnanakos@grnet.gr>  Wed, 19 Feb 2014 13:03:39 +0200
 
 blktap (2.0.90-1) unstable; urgency=low
 
