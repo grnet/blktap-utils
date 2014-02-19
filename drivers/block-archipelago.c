@@ -56,6 +56,10 @@
 #define MAX_ARCHIPELAGO_MERGED_REQS 32
 #define NUM_XSEG_THREADS 2
 
+#define XSEG_TYPENAME       "posix"
+#define XSEG_NAME           "archipelago"
+#define XSEG_PEERTYPENAME   "posixfd"
+
 struct tdarchipelago_request {
     td_request_t treq[MAX_ARCHIPELAGO_MERGED_REQS];
     int treq_count;
@@ -322,7 +326,7 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
             goto err_exit;
         }
     }
-    xseg = xseg_join((char *)"segdev", (char *)"xsegbd", (char *)"posixfd", NULL);
+    xseg = xseg_join((char *)XSEG_TYPENAME, (char *)XSEG_NAME, (char *)XSEG_PEERTYPENAME, NULL);
     if(!xseg) {
         DPRINTF("tdarchipelago_open(): Cannot join segment.\n");
         goto err_exit;
