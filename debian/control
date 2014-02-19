@@ -2,7 +2,6 @@ Source: blktap
 Section: libs
 Priority: extra
 Maintainer: Chrysostomos Nanakos <cnanakos@grnet.gr>
-Uploaders: Chrysostomos Nanakos <cnanakos@grnet.gr>
 Build-Depends: debhelper (>= 8), autotools-dev, uuid-dev, libaio-dev, libtool, autoconf, automake, libxseg-dev
 Standards-Version: 3.9.5
 Vcs-Browser: http://git.debian.org/?p=pkg-xen/blktap.git
