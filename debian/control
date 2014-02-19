@@ -1,10 +1,10 @@
 Source: blktap
 Section: libs
 Priority: extra
-Maintainer: PKG Xen Devel <pkg-xen-devel@lists.alioth.debian.org>
-Uploaders: Thomas Goirand <zigo@debian.org>
-Build-Depends: debhelper (>= 8), autotools-dev, uuid-dev, libaio-dev, libtool, autoconf, automake
-Standards-Version: 3.9.2
+Maintainer: Chrysostomos Nanakos <cnanakos@grnet.gr>
+Uploaders: Chrysostomos Nanakos <cnanakos@grnet.gr>
+Build-Depends: debhelper (>= 8), autotools-dev, uuid-dev, libaio-dev, libtool, autoconf, automake, libxseg-dev
+Standards-Version: 3.9.5
 Vcs-Browser: http://git.debian.org/?p=pkg-xen/blktap.git
 Vcs-Git: http://git.debian.org/git/pkg-xen/blktap.git
 Homepage: http://www.xen.org/products/cloudxen.html
