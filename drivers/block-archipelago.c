@@ -52,9 +52,10 @@
 #include "config.h"
 #endif
 
-#define MAX_ARCHIPELAGO_REQS    TAPDISK_DATA_REQUESTS
+#define MAX_ARCHIPELAGO_REQS        TAPDISK_DATA_REQUESTS
 #define MAX_ARCHIPELAGO_MERGED_REQS 32
-#define NUM_XSEG_THREADS 2
+#define MAX_MERGE_SIZE              524288
+#define NUM_XSEG_THREADS            2
 
 #define XSEG_TYPENAME       "posix"
 #define XSEG_NAME           "archipelago"
@@ -648,7 +649,7 @@ static void tdarchipelago_queue_request(td_driver_t *driver, td_request_t treq)
         }
 
         if(!merged || (size != (11 * 4096)) || //44k request
-                (dr->size >= 1024 * 1024) ||
+                (dr->size >= MAX_MERGE_SIZE) ||
                 (dr->treq_count == MAX_ARCHIPELAGO_MERGED_REQS))
         {
             tdarchipelago_submit_request(prv, dr);
@@ -681,7 +682,7 @@ static void tdarchipelago_queue_request(td_driver_t *driver, td_request_t treq)
         req->size = size;
         req->buf = treq.buf;
 
-        if ((size == (11 * 4096)) && (size < 1024 * 1024)) {
+        if ((size == (11 * 4096)) && (size < MAX_MERGE_SIZE)) {
             prv->req_deferred = req;
         } else {
             tdarchipelago_submit_request(prv, req);
@@ -729,7 +730,7 @@ static void tdarchipelago_stats(td_driver_t *driver, td_stats_t *st)
     tapdisk_stats_field(st, "req_miss_op", "d", prv->stat.req_miss_op);
     tapdisk_stats_field(st, "req_miss_ofs", "d", prv->stat.req_miss_ofs);
     tapdisk_stats_field(st, "req_miss_buf", "d", prv->stat.req_miss_buf);
-    tapdisk_stats_field(st, "max_merge_size", "d", 1024 * 1024);
+    tapdisk_stats_field(st, "max_merge_size", "d", MAX_MERGE_SIZE);
 }
 
 struct tap_disk tapdisk_archipelago = {
