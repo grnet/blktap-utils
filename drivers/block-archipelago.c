@@ -372,7 +372,7 @@ err_exit:
 static int tdarchipelago_close(td_driver_t *driver)
 {
     struct tdarchipelago_data *prv = driver->data;
-    int i;
+    int i, r;
 
     for(i=0; i<NUM_XSEG_THREADS; i++) {
         if(archipelago_th[i].is_running) {
@@ -385,6 +385,35 @@ static int tdarchipelago_close(td_driver_t *driver)
             pthread_mutex_destroy(&archipelago_th[i].request_mutex);
         }
     }
+
+    int targetlen = strlen(prv->volname);
+    struct xseg_request *req = xseg_get_request(xseg, srcport, vportno, X_ALLOC);
+    r = xseg_prep_request(xseg, req, targetlen, 0);
+    if(r < 0) {
+        xseg_put_request(xseg, req, srcport);
+        DPRINTF("tdarchipelago_close(): Cannot prepare close request.");
+    }
+
+    char *target = xseg_get_target(xseg, req);
+    strncpy(target, prv->volname, targetlen);
+    req->size = req->datalen;
+    req->offset = 0;
+    req->op = X_CLOSE;
+
+    xport p = xseg_submit(xseg, req, srcport, X_ALLOC);
+    if(p == NoPort) {
+        xseg_put_request(xseg, req, srcport);
+        DPRINTF("tdarchipelago_close(): Cannot submit close request.");
+    }
+
+    xseg_signal(xseg, p);
+    r = wait_reply(req);
+    if(r < 0) {
+        xseg_put_request(xseg, req, srcport);
+        DPRINTF("tdarchipelago_close(): wait_reply() error.");
+    }
+    xseg_put_request(xseg, req, srcport);
+
     xseg_leave_dynport(xseg, port);
     xseg_leave(xseg);
 
