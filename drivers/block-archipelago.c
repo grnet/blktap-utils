@@ -390,8 +390,8 @@ static int tdarchipelago_close(td_driver_t *driver)
     struct xseg_request *req = xseg_get_request(xseg, srcport, vportno, X_ALLOC);
     r = xseg_prep_request(xseg, req, targetlen, 0);
     if(r < 0) {
-        xseg_put_request(xseg, req, srcport);
         DPRINTF("tdarchipelago_close(): Cannot prepare close request.");
+        goto err_exit;
     }
 
     char *target = xseg_get_target(xseg, req);
@@ -404,16 +404,17 @@ static int tdarchipelago_close(td_driver_t *driver)
     if(p == NoPort) {
         xseg_put_request(xseg, req, srcport);
         DPRINTF("tdarchipelago_close(): Cannot submit close request.");
+        goto err_exit;
     }
 
     xseg_signal(xseg, p);
     r = wait_reply(req);
-    if(r < 0) {
-        xseg_put_request(xseg, req, srcport);
+    if(r < 0)
         DPRINTF("tdarchipelago_close(): wait_reply() error.");
-    }
+
     xseg_put_request(xseg, req, srcport);
 
+err_exit:
     xseg_leave_dynport(xseg, port);
     xseg_leave(xseg);
 
