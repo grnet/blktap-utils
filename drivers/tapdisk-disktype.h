@@ -45,6 +45,7 @@
 #define DISK_TYPE_LLPCACHE    13
 #define DISK_TYPE_VALVE       14
 #define DISK_TYPE_ARCHIPELAGO 15
+#define DISK_TYPE_PITHOS      16
 
 #define DISK_TYPE_NAME_MAX    32
 
