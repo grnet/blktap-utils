@@ -88,7 +88,6 @@ static xport srcport = NoPort;
 static struct xseg_port *port;
 static xport mportno = NoPort;
 static xport vportno = NoPort;
-static uint64_t pithos_filesize = -1;
 
 struct tdpithos_data {
     /* Pithos+ mapfile and File Size */
@@ -193,21 +192,52 @@ static void xseg_request_handler(void *arthd)
     pthread_exit(NULL);
 }
 
+static uint64_t get_image_info(char *mapfile)
+{
+    uint64_t size;
+    int r;
+
+    int targetlen = strlen(mapfile);
+    struct xseg_request *req = xseg_get_request(xseg, srcport, mportno, X_ALLOC);
+    r = xseg_prep_request(xseg, req, targetlen, sizeof(struct xseg_reply_info));
+    if(r < 0) {
+        xseg_put_request(xseg, req, srcport);
+        DPRINTF("get_image_info(): Cannot prepare request. Aborting...");
+        exit(-1);
+    }
+
+    char *target = xseg_get_target(xseg, req);
+    strncpy(target, mapfile, targetlen);
+    req->size = req->datalen;
+    req->offset = 0;
+    req->op = X_INFO;
+    req->flags |= XF_CONTADDR;
+
+    xport p = xseg_submit(xseg, req, srcport, X_ALLOC);
+    if(p == NoPort) {
+        xseg_put_request(xseg, req, srcport);
+        DPRINTF("get_image_info(): Cannot submit request. Aborting...");
+        exit(-1);
+    }
+    xseg_signal(xseg, p);
+    r = wait_reply(req);
+    if(r) {
+        xseg_put_request(xseg, req, srcport);
+        DPRINTF("get_image_info(): wait_reply() error. Aborting...");
+        exit(-1);
+    }
+    struct xseg_reply_info *xinfo = (struct xseg_reply_info *) xseg_get_data(xseg, req);
+    size = xinfo->size;
+    xseg_put_request(xseg, req, srcport);
+    return size;
+}
+
 static void xseg_find_port(char *pstr, const char *needle, xport *port)
 {
     char *a;
     char *dpstr = strdup(pstr);
     a = strtok(dpstr, needle);
     *port = (xport) atoi(a);
-    free(dpstr);
-}
-
-static void pithos_find_filesize(char *pstr, const char *needle, uint64_t *filesize)
-{
-    char *a;
-    char *dpstr = strdup(pstr);
-    a = strtok(dpstr, needle);
-    *filesize = atoi(a);
     free(dpstr);
 }
 
@@ -236,8 +266,6 @@ static void parse_uri(char **mapfile, const char *s)
             xseg_find_port(tokens[nn], "mport=", &mportno);
         if(strstr(tokens[nn], "vport="))
             xseg_find_port(tokens[nn], "vport=", &vportno);
-        if(strstr(tokens[nn], "filesize="))
-            pithos_find_filesize(tokens[nn], "filesize=", &pithos_filesize);
     }
 }
 
@@ -303,13 +331,10 @@ static int tdpithos_open(td_driver_t *driver, const char *name, td_flag_t flags)
     srcport = port->portno;
     xseg_init_local_signal(xseg, srcport);
 
-    if(pithos_filesize == -1)
-        goto err_exit;
-
-    prv->filesize = pithos_filesize;
+    prv->filesize = get_image_info(prv->mapfile);
 
     driver->info.sector_size = DEFAULT_SECTOR_SIZE;
-    driver->info.size = pithos_filesize >> SECTOR_SHIFT;
+    driver->info.size = prv->filesize >> SECTOR_SHIFT;
     driver->info.info = 0;
 
     /* Start XSEG Request Handler Threads */
@@ -363,6 +388,7 @@ static int tdpithos_close(td_driver_t *driver)
     req->size = req->datalen;
     req->offset = 0;
     req->op = X_CLOSE;
+    req->flags |= XF_CONTADDR;
 
     xport p = xseg_submit(xseg, req, srcport, X_ALLOC);
     if(p == NoPort) {
