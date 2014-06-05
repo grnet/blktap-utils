@@ -133,12 +133,6 @@ static const disk_info_t archipelago_disk = {
     0,
 };
 
-static const disk_info_t pithos_disk = {
-    "pithos",
-    "Pithos+ image",
-    0,
-};
-
 const disk_info_t *tapdisk_disk_types[] = {
 	[DISK_TYPE_AIO]	= &aio_disk,
 	[DISK_TYPE_SYNC]	= &sync_disk,
@@ -156,7 +150,6 @@ const disk_info_t *tapdisk_disk_types[] = {
 	[DISK_TYPE_LLPCACHE]    = &llpcache_disk,
 	[DISK_TYPE_LLECACHE]    = &llecache_disk,
 	[DISK_TYPE_ARCHIPELAGO]    = &archipelago_disk,
-	[DISK_TYPE_PITHOS]    = &pithos_disk,
 	0,
 };
 
@@ -182,7 +175,6 @@ extern struct tap_disk tapdisk_llecache;
 extern struct tap_disk tapdisk_valve;
 
 extern struct tap_disk tapdisk_archipelago;
-extern struct tap_disk tapdisk_pithos;
 
 const struct tap_disk *tapdisk_disk_drivers[] = {
 	[DISK_TYPE_AIO]         = &tapdisk_aio,
@@ -206,7 +198,6 @@ const struct tap_disk *tapdisk_disk_drivers[] = {
 	[DISK_TYPE_LLECACHE]    = &tapdisk_llecache,
 	[DISK_TYPE_VALVE]       = &tapdisk_valve,
 	[DISK_TYPE_ARCHIPELAGO] = &tapdisk_archipelago,
-	[DISK_TYPE_PITHOS] = &tapdisk_pithos,
 	0,
 };
 
