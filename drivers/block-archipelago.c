@@ -102,6 +102,8 @@ struct tdarchipelago_data {
     xport srcport;
     xport mportno;
     xport vportno;
+    bool assume_v0;
+    uint64_t v0_size;
 
     /* Archipelago I/O Thread */
     ArchipelagoThread *io_thread;
@@ -141,6 +143,19 @@ struct tdarchipelago_data {
 static void tdarchipelago_finish_aiocb(void *arg, ssize_t c, AIORequestData *reqdata);
 static int tdarchipelago_close(td_driver_t *driver);
 static void tdarchipelago_pipe_read_cb(event_id_t eb, char mode, void *data);
+
+static void req_fix_v0(struct tdarchipelago_data *prv, struct xseg_request *req)
+{
+    if (!prv->assume_v0) {
+        return;
+    }
+    req->flags |= XF_CONTADDR;
+    req->flags |= XF_ASSUMEV0;
+    if (prv->v0_size != -1) {
+        req->contaddr_size = prv->v0_size;
+        req->v0_size = prv->v0_size;
+    }
+}
 
 static int wait_reply(struct tdarchipelago_data *prv, struct xseg_request *expected_req)
 {
@@ -221,6 +236,7 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     req->size = req->datalen;
     req->offset = 0;
     req->op = X_INFO;
+    req_fix_v0(td, req);
 
     xport p = xseg_submit(td->xseg, req, td->srcport, X_ALLOC);
     if(p == NoPort) {
@@ -250,10 +266,19 @@ static void xseg_find_port(char *pstr, const char *needle, xport *port)
     free(dpstr);
 }
 
+static void find_v0_size(char *size_str, const char *needle, uint64_t *size)
+{
+    char *a;
+    char *temp_str = strdup(size_str);
+    a = strtok(size_str, needle);
+    *size = (uint64_t) atol(a);
+    free(temp_str);
+}
+
 static void parse_uri(struct tdarchipelago_data *prv, const char *s)
 {
     int n=0, nn, i;
-    char *tokens[4];
+    char *tokens[6];
 
     char *ds = strdup(s);
     tokens[n] = strtok(ds, ":");
@@ -263,8 +288,8 @@ static void parse_uri(struct tdarchipelago_data *prv, const char *s)
     for(i = 0, nn = 0; s[i]; i++)
         nn += (s[i] == ':');
     /* FIXME: Protect tokens array overflow */
-    if( nn > 3)
-        i = 3;
+    if( nn > 5)
+        i = 5;
     else
         i = nn;
 
@@ -275,6 +300,15 @@ static void parse_uri(struct tdarchipelago_data *prv, const char *s)
             xseg_find_port(tokens[nn], "mport=", &prv->mportno);
         if(strstr(tokens[nn], "vport="))
             xseg_find_port(tokens[nn], "vport=", &prv->vportno);
+        if(strstr(tokens[nn], "assume_v0"))
+            prv->assume_v0 = 1;
+        if(strstr(tokens[nn], "v0_size="))
+            find_v0_size(tokens[nn], "v0_size=", &prv->v0_size);
+    }
+
+    if(!prv->assume_v0 && prv->v0_size != -1) {
+        DPRINTF("archipelago_parse_uri(): Ignoring provided v0_size\n");
+        prv->v0_size = -1;
     }
 }
 
@@ -290,6 +324,8 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     /*Default mapperd and vlmcd ports */
     prv->vportno = 501;
     prv->mportno = 1001;
+    prv->assume_v0 = 0;
+    prv->v0_size = -1;
 
     INIT_LIST_HEAD(&prv->reqs_inflight);
     INIT_LIST_HEAD(&prv->reqs_free);
@@ -404,6 +440,7 @@ static int tdarchipelago_close(td_driver_t *driver)
     req->size = req->datalen;
     req->offset = 0;
     req->op = X_CLOSE;
+    req_fix_v0(prv, req);
 
     xport p = xseg_submit(prv->xseg, req, prv->srcport, X_ALLOC);
     if(p == NoPort) {
@@ -524,6 +561,7 @@ static int __archipelago_submit_request(struct tdarchipelago_data *prv,
             break;
     }
     req->flags |= XF_FLUSH;
+    req_fix_v0(prv, req);
 
     reqdata = (AIORequestData *) malloc(sizeof(AIORequestData));
     if (!reqdata) {
