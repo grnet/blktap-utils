@@ -149,10 +149,8 @@ static void req_fix_v0(struct tdarchipelago_data *prv, struct xseg_request *req)
     if (!prv->assume_v0) {
         return;
     }
-    req->flags |= XF_CONTADDR;
     req->flags |= XF_ASSUMEV0;
     if (prv->v0_size != -1) {
-        req->contaddr_size = prv->v0_size;
         req->v0_size = prv->v0_size;
     }
 }
