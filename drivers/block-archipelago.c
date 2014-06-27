@@ -55,7 +55,6 @@
 #define MAX_ARCHIPELAGO_REQS        TAPDISK_DATA_REQUESTS
 #define MAX_ARCHIPELAGO_MERGED_REQS 32
 #define MAX_MERGE_SIZE              524288
-#define NUM_XSEG_THREADS            2
 
 #define XSEG_TYPENAME       "posix"
 #define XSEG_NAME           "archipelago"
@@ -92,8 +91,9 @@ typedef struct ArchipelagoThread {
 
 
 struct tdarchipelago_data {
-    /* Archipelago Volume Name and Size */
+    /* Archipelago Volume Name,segment name and Size */
     char *volname;
+    char *segment_name;
     uint64_t size;
 
     /* Archipelago specific */
@@ -143,6 +143,22 @@ struct tdarchipelago_data {
 static void tdarchipelago_finish_aiocb(AIORequestData *reqdata);
 static int tdarchipelago_close(td_driver_t *driver);
 static void tdarchipelago_pipe_read_cb(event_id_t eb, char mode, void *data);
+
+static int strstart(const char *str, const char *val, const char **ptr)
+{
+    const char *p, *q;
+    p = str;
+    q = val;
+    while (*q != '\0') {
+        if (*p != *q)
+            return 0;
+        p++;
+        q++;
+    }
+    if (ptr)
+        *ptr = p;
+    return 1;
+}
 
 static void req_fix_v0(struct tdarchipelago_data *prv, struct xseg_request *req)
 {
@@ -272,6 +288,17 @@ static void xseg_find_port(char *pstr, const char *needle, xport *port)
     free(dpstr);
 }
 
+static void xseg_find_segment(char *pstr, const char *needle,
+                              char **segment_name)
+{
+    const char *a;
+    if (strstart(pstr, needle, &a)) {
+        if (strlen(a) > 0) {
+            *segment_name = strdup(a);
+        }
+    }
+}
+
 static void find_v0_size(char *size_str, const char *needle, uint64_t *size)
 {
     char *a;
@@ -284,7 +311,7 @@ static void find_v0_size(char *size_str, const char *needle, uint64_t *size)
 static void parse_uri(struct tdarchipelago_data *prv, const char *s)
 {
     int n=0, nn, i;
-    char *tokens[6];
+    char *tokens[7];
 
     char *ds = strdup(s);
     tokens[n] = strtok(ds, ":");
@@ -294,8 +321,8 @@ static void parse_uri(struct tdarchipelago_data *prv, const char *s)
     for(i = 0, nn = 0; s[i]; i++)
         nn += (s[i] == ':');
     /* FIXME: Protect tokens array overflow */
-    if( nn > 5)
-        i = 5;
+    if( nn > 6)
+        i = 6;
     else
         i = nn;
 
@@ -310,6 +337,8 @@ static void parse_uri(struct tdarchipelago_data *prv, const char *s)
             prv->assume_v0 = 1;
         if(strstr(tokens[nn], "v0_size="))
             find_v0_size(tokens[nn], "v0_size=", &prv->v0_size);
+        if(strstr(tokens[nn], "segment="))
+            xseg_find_segment(tokens[nn], "segment=", &prv->segment_name);
     }
 
     if(!prv->assume_v0 && prv->v0_size != -1) {
@@ -349,6 +378,10 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     /* Parse Archipelago Volume Name and XSEG mportno, vportno */
     parse_uri(prv, name);
 
+    if (!prv->segment_name) {
+        prv->segment_name = strdup(XSEG_NAME);
+    }
+
     /* Inter-thread pipe setup */
     retval = pipe(prv->pipe_fds);
     if(retval) {
@@ -367,7 +400,7 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
         DPRINTF("tdarchipelago_open(): Cannot initialize xseg.\n");
         goto err_exit;
     }
-    prv->xseg = xseg_join((char *)XSEG_TYPENAME, (char *)XSEG_NAME, (char *)XSEG_PEERTYPENAME, NULL);
+    prv->xseg = xseg_join((char *)XSEG_TYPENAME, prv->segment_name, (char *)XSEG_PEERTYPENAME, NULL);
     if(!prv->xseg) {
         DPRINTF("tdarchipelago_open(): Cannot join segment.\n");
         goto err_exit;
