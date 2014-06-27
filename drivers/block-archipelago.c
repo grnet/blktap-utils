@@ -76,7 +76,7 @@ typedef struct AIORequestData {
     char *volname;
     off_t offset;
     ssize_t size;
-    char *buf;
+    void *buf;
     int ret;
     int op;
     struct tdarchipelago_request *tdreq;
@@ -140,7 +140,7 @@ struct tdarchipelago_data {
 };
 
 
-static void tdarchipelago_finish_aiocb(void *arg, ssize_t c, AIORequestData *reqdata);
+static void tdarchipelago_finish_aiocb(AIORequestData *reqdata);
 static int tdarchipelago_close(td_driver_t *driver);
 static void tdarchipelago_pipe_read_cb(event_id_t eb, char mode, void *data);
 
@@ -192,16 +192,24 @@ static void xseg_request_handler(void *data)
         if(req) {
             AIORequestData *reqdata;
             xseg_get_req_data(th_data->xseg, req, (void **)&reqdata);
+
+            if (!(req->state & XS_SERVED)) {
+                reqdata->ret = -1;
+                tdarchipelago_finish_aiocb(reqdata);
+                xseg_put_request(th_data->xseg, req, th_data->srcport);
+                continue;
+            }
+
             if(reqdata->op == TD_OP_READ)
             {
-                char *data = xseg_get_data(th_data->xseg, req);
+                void *data = xseg_get_data(th_data->xseg, req);
                 memcpy(reqdata->buf, data, req->serviced);
-                int serviced = req->serviced;
-                tdarchipelago_finish_aiocb(reqdata->tdreq, serviced, reqdata);
+                reqdata->ret = req->serviced;
+                tdarchipelago_finish_aiocb(reqdata);
                 xseg_put_request(th_data->xseg, req, th_data->srcport);
             } else if(reqdata->op == TD_OP_WRITE) {
-                int serviced = req->serviced;
-                tdarchipelago_finish_aiocb(reqdata->tdreq, serviced, reqdata);
+                reqdata->ret = req->serviced;
+                tdarchipelago_finish_aiocb(reqdata);
                 xseg_put_request(th_data->xseg, req, th_data->srcport);
             }
         } else {
@@ -230,7 +238,7 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     }
 
     char *target = xseg_get_target(td->xseg, req);
-    strncpy(target, td->volname, targetlen);
+    memcpy(target, td->volname, targetlen);
     req->size = req->datalen;
     req->offset = 0;
     req->op = X_INFO;
@@ -383,7 +391,7 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     /* Start XSEG Request Handler Threads */
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
     prv->io_thread = (ArchipelagoThread *) malloc(sizeof(ArchipelagoThread));
 
@@ -421,6 +429,7 @@ static int tdarchipelago_close(td_driver_t *driver)
     while(!prv->io_thread->is_signaled)
         pthread_cond_wait(&prv->io_thread->request_cond, &prv->io_thread->request_mutex);
     pthread_mutex_unlock(&prv->io_thread->request_mutex);
+    pthread_join(prv->io_thread->request_th, NULL);
     pthread_cond_destroy(&prv->io_thread->request_cond);
     pthread_mutex_destroy(&prv->io_thread->request_mutex);
     free(prv->io_thread);
@@ -434,7 +443,7 @@ static int tdarchipelago_close(td_driver_t *driver)
     }
 
     char *target = xseg_get_target(prv->xseg, req);
-    strncpy(target, prv->volname, targetlen);
+    memcpy(target, prv->volname, targetlen);
     req->size = req->datalen;
     req->offset = 0;
     req->op = X_CLOSE;
@@ -457,18 +466,16 @@ static int tdarchipelago_close(td_driver_t *driver)
 err_exit:
     xseg_leave_dynport(prv->xseg, prv->port);
     xseg_leave(prv->xseg);
-
-
     return 0;
 }
 
-static void tdarchipelago_finish_aiocb(void *arg, ssize_t c, AIORequestData *reqdata)
+static void tdarchipelago_finish_aiocb(AIORequestData *reqdata)
 {
-    struct tdarchipelago_request *req = arg;
-    struct tdarchipelago_data *prv = req->treq[0].image->driver->data;
     int rv;
+    struct tdarchipelago_request *req = reqdata->tdreq;
+    struct tdarchipelago_data *prv = req->treq[0].image->driver->data;
 
-    req->result = c;
+    req->result = reqdata->ret;
 
     while(1) {
         rv = write(prv->pipe_fds[1], (void *)&req, sizeof(req));
@@ -546,7 +553,7 @@ static int __archipelago_submit_request(struct tdarchipelago_data *prv,
         goto err_exit;
     }
 
-    strncpy(target, prv->volname, targetlen);
+    memcpy(target, prv->volname, targetlen);
     req->size = tdreq->size;
     req->offset = tdreq->offset;
 
