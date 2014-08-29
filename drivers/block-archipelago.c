@@ -177,7 +177,7 @@ static int wait_reply(struct tdarchipelago_data *prv, struct xseg_request *expec
     xseg_prepare_wait(prv->xseg, prv->srcport);
     void *psd = xseg_get_signal_desc(prv->xseg, prv->port);
     while(1) {
-        req = xseg_receive(prv->xseg, prv->srcport, 0);
+        req = xseg_receive(prv->xseg, prv->srcport, X_NONBLOCK);
         if(req) {
             if( req != expected_req) {
                 DPRINTF("wait_reply(): Unknown request.\n");
@@ -204,7 +204,7 @@ static void xseg_request_handler(void *data)
     while(th->is_running) {
         struct xseg_request *req;
         xseg_prepare_wait(th_data->xseg, th_data->srcport);
-        req = xseg_receive(th_data->xseg, th_data->srcport, 0);
+        req = xseg_receive(th_data->xseg, th_data->srcport, X_NONBLOCK);
         if(req) {
             AIORequestData *reqdata;
             xseg_get_req_data(th_data->xseg, req, (void **)&reqdata);
