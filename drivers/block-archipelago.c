@@ -56,9 +56,12 @@
 #define MAX_ARCHIPELAGO_MERGED_REQS 32
 #define MAX_MERGE_SIZE              524288
 
-#define XSEG_TYPENAME       "posix"
-#define XSEG_NAME           "archipelago"
-#define XSEG_PEERTYPENAME   "posixfd"
+#define XSEG_TYPENAME               "posix"
+#define XSEG_NAME                   "archipelago"
+#define XSEG_PEERTYPENAME           "posixfd"
+
+#define ARCHIPELAGO_DFL_MPORT       1001
+#define ARCHIPELAGO_DFL_VPORT       501
 
 struct tdarchipelago_request {
     td_request_t treq[MAX_ARCHIPELAGO_MERGED_REQS];
@@ -357,8 +360,8 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     memset(prv, 0x00, sizeof(struct tdarchipelago_data));
 
     /*Default mapperd and vlmcd ports */
-    prv->vportno = 501;
-    prv->mportno = 1001;
+    prv->vportno = ARCHIPELAGO_DFL_VPORT;
+    prv->mportno = ARCHIPELAGO_DFL_MPORT;
     prv->assume_v0 = 0;
     prv->v0_size = -1;
 
