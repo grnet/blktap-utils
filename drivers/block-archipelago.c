@@ -56,9 +56,12 @@
 #define MAX_ARCHIPELAGO_MERGED_REQS 32
 #define MAX_MERGE_SIZE              524288
 
-#define XSEG_TYPENAME       "posix"
-#define XSEG_NAME           "archipelago"
-#define XSEG_PEERTYPENAME   "posixfd"
+#define XSEG_TYPENAME               "posix"
+#define XSEG_NAME                   "archipelago"
+#define XSEG_PEERTYPENAME           "posixfd"
+
+#define ARCHIPELAGO_DFL_MPORT       1001
+#define ARCHIPELAGO_DFL_VPORT       501
 
 struct tdarchipelago_request {
     td_request_t treq[MAX_ARCHIPELAGO_MERGED_REQS];
@@ -177,7 +180,7 @@ static int wait_reply(struct tdarchipelago_data *prv, struct xseg_request *expec
     xseg_prepare_wait(prv->xseg, prv->srcport);
     void *psd = xseg_get_signal_desc(prv->xseg, prv->port);
     while(1) {
-        req = xseg_receive(prv->xseg, prv->srcport, 0);
+        req = xseg_receive(prv->xseg, prv->srcport, X_NONBLOCK);
         if(req) {
             if( req != expected_req) {
                 DPRINTF("wait_reply(): Unknown request.\n");
@@ -204,7 +207,7 @@ static void xseg_request_handler(void *data)
     while(th->is_running) {
         struct xseg_request *req;
         xseg_prepare_wait(th_data->xseg, th_data->srcport);
-        req = xseg_receive(th_data->xseg, th_data->srcport, 0);
+        req = xseg_receive(th_data->xseg, th_data->srcport, X_NONBLOCK);
         if(req) {
             AIORequestData *reqdata;
             xseg_get_req_data(th_data->xseg, req, (void **)&reqdata);
@@ -357,8 +360,8 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     memset(prv, 0x00, sizeof(struct tdarchipelago_data));
 
     /*Default mapperd and vlmcd ports */
-    prv->vportno = 501;
-    prv->mportno = 1001;
+    prv->vportno = ARCHIPELAGO_DFL_VPORT;
+    prv->mportno = ARCHIPELAGO_DFL_MPORT;
     prv->assume_v0 = 0;
     prv->v0_size = -1;
 
