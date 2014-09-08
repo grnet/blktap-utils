@@ -44,13 +44,15 @@
 #define DISK_TYPE_LLECACHE    12
 #define DISK_TYPE_LLPCACHE    13
 #define DISK_TYPE_VALVE       14
+#define DISK_TYPE_ARCHIPELAGO 15
+#define DISK_TYPE_PITHOS      16
 
 #define DISK_TYPE_NAME_MAX    32
 
 typedef struct disk_info {
 	const char     *name; /* driver name, e.g. 'aio' */
 	char           *desc;  /* e.g. "raw image" */
-	unsigned int    flags; 
+	unsigned int    flags;
 } disk_info_t;
 
 extern const disk_info_t     *tapdisk_disk_types[];
