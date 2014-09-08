@@ -1,3 +1,9 @@
+blktap-archipelago (2.1~rc1-1~wheezy) wheezy; urgency=low
+
+  * New upstream version
+
+ -- Filippos Giannakos <philipgian@grnet.gr>  Mon, 08 Sep 2014 17:59:37 +0300
+
 blktap-archipelago (2.0.90-2) unstable; urgency=low
 
   * Add Archipelago support
@@ -13,3 +19,4 @@ blktap-archipelago (2.0.90-1) unstable; urgency=low
   * Initial release. (Closes: #635115)
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 21 Jul 2011 17:08:44 +0000
+
