@@ -1,10 +1,10 @@
 #!/usr/bin/make -f
 
-pkg_libvhd = libvhd0
+pkg_libvhd = libvhd0-archipelago
 vrs_libvhd = 0.1.1
-pkg_libvhdio = libvhdio2
-vrs_libvhdio = 2.0.90
-pkg_libblktapctl = libblktapctl0
+pkg_libvhdio = libvhdio2-archipelago
+vrs_libvhdio = 2.1rc1
+pkg_libblktapctl = libblktapctl0-archipelago
 vrs_libblktapctl = 0.1.1
 
 

@@ -1,4 +1,4 @@
-blktap (2.0.90-2) unstable; urgency=low
+blktap-archipelago (2.0.90-2) unstable; urgency=low
 
   * Add Archipelago support
   * Update debian/control
@@ -8,7 +8,7 @@ blktap (2.0.90-2) unstable; urgency=low
 
  -- Chrysostomos Nanakos <cnanakos@grnet.gr>  Wed, 19 Feb 2014 13:03:39 +0200
 
-blktap (2.0.90-1) unstable; urgency=low
+blktap-archipelago (2.0.90-1) unstable; urgency=low
 
   * Initial release. (Closes: #635115)
 

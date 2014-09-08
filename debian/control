@@ -1,18 +1,22 @@
-Source: blktap
+Source: blktap-archipelago
 Section: libs
 Priority: extra
 Maintainer: Chrysostomos Nanakos <cnanakos@grnet.gr>
 Build-Depends: debhelper (>= 8), autotools-dev, uuid-dev, libaio-dev, libtool,
- autoconf, automake, libxseg-dev(>=0.3), libxseg-dev(<<0.4)
+ autoconf, automake, libxseg-dev(>>0.3.5)
+Conflicts: blktap
+Replaces: blktap
 Standards-Version: 3.9.5
 Vcs-Browser: http://git.debian.org/?p=pkg-xen/blktap.git
 Vcs-Git: http://git.debian.org/git/pkg-xen/blktap.git
 Homepage: http://www.xen.org/products/cloudxen.html
 
-Package: blktap-dev
+Package: blktap-archipelago-dev
 Section: devel
 Architecture: i386 amd64
-Depends: ${misc:Depends}, ${shlibs:Depends}, libvhd0 (= ${binary:Version}), libvhdio-2.0.90 (= ${binary:Version}), libblktapctl0 (= ${binary:Version})
+Depends: ${misc:Depends}, ${shlibs:Depends}, libvhd0-archipelago (= ${binary:Version}), libvhdio-archipelago-2.1rc1 (= ${binary:Version}), libblktapctl0-archipelago (= ${binary:Version})
+Conflicts: blktap-dev
+Replaces: blktap-dev
 Description: Xen API blktap shared library (development files)
  The Xen Cloud Platform (XCP) is an open source enterprise-ready server
  virtualization and cloud computing platform, delivering the Xen Hypervisor
@@ -35,12 +39,14 @@ Description: Xen API blktap shared library (development files)
  .
  This package contains the development files
 
-Package: blktap-utils
+Package: blktap-archipelago-utils
 Section: utils
 Architecture: i386 amd64
-Depends: ${misc:Depends}, ${shlibs:Depends}, libvhd0 (= ${binary:Version}),
- libvhdio-2.0.90 (= ${binary:Version}), libblktapctl0 (= ${binary:Version}),
- blktap-dkms, libxseg0(>=0.3), libxseg0(<<0.4), archipelago-protocol1
+Depends: ${misc:Depends}, ${shlibs:Depends}, libvhd0-archipelago (= ${binary:Version}),
+ libvhdio-archipelago-2.1rc1 (= ${binary:Version}), libblktapctl0-archipelago (= ${binary:Version}),
+ blktap-dkms, libxseg0(>>0.3.5), archipelago-protocol1
+Conflicts: blktap-utils
+Replaces: blktap-utils
 Description: utilities to work with VHD disk images files
  The Xen Cloud Platform (XCP) is an open source enterprise-ready server
  virtualization and cloud computing platform, delivering the Xen Hypervisor
@@ -62,9 +68,11 @@ Description: utilities to work with VHD disk images files
  needed to create destroy and manipulate devices ('tap-ctl'), the 'tapdisk'
  driver program to perform tap devices I/O, and a number of image drivers.
 
-Package: libvhd0
+Package: libvhd0-archipelago
 Architecture: i386 amd64
 Depends: ${misc:Depends}, ${shlibs:Depends}
+Conflicts: libvhd0
+Replaces: libvhd0
 Description: VHD file format access library
  The Xen Cloud Platform (XCP) is an open source enterprise-ready server
  virtualization and cloud computing platform, delivering the Xen Hypervisor
@@ -87,9 +95,11 @@ Description: VHD file format access library
  .
  This package contains the runtime vhd library.
 
-Package: libvhdio-2.0.90
+Package: libvhdio-archipelago-2.1rc1
 Architecture: i386 amd64
 Depends: ${misc:Depends}, ${shlibs:Depends}
+Conflicts: libvhdio-2.0.90
+Replaces: libvhdio-2.0.90
 Description: Xen API blktap shared library (shared library)
  The Xen Cloud Platform (XCP) is an open source enterprise-ready server
  virtualization and cloud computing platform, delivering the Xen Hypervisor
@@ -108,9 +118,11 @@ Description: Xen API blktap shared library (shared library)
  .
  This package contains the runtime vhdio library.
 
-Package: libblktapctl0
+Package: libblktapctl0-archipelago
 Architecture: i386 amd64
 Depends: ${misc:Depends}, ${shlibs:Depends}
+Conflicts: libblktapctl0
+Replaces: libblktapctl0
 Description: Xen API blktapctl shared library (shared library)
  The Xen Cloud Platform (XCP) is an open source enterprise-ready server
  virtualization and cloud computing platform, delivering the Xen Hypervisor
