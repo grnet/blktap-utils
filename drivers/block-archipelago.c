@@ -253,7 +253,7 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     if(r < 0) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot prepare request. Aborting...");
-        exit(-1);
+        return -1;
     }
 
     char *target = xseg_get_target(td->xseg, req);
@@ -267,14 +267,14 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     if(p == NoPort) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot submit request. Aborting...");
-        exit(-1);
+        return -1;
     }
     xseg_signal(td->xseg, p);
     r = wait_reply(td, req);
     if(r) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): wait_reply() error. Aborting...");
-        exit(-1);
+        return -1;
     }
     struct xseg_reply_info *xinfo = (struct xseg_reply_info *) xseg_get_data(td->xseg, req);
     size = xinfo->size;
@@ -389,6 +389,7 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     retval = pipe(prv->pipe_fds);
     if(retval) {
         DPRINTF("tdarchipelago_open(): Failed to create inter-thread pipe (%d)\n", retval);
+        retval = -errno;
         goto err_exit;
     }
     prv->pipe_event_id = tapdisk_server_register_event(
@@ -401,23 +402,34 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     /* Archipelago context */
     if(xseg_initialize()) {
         DPRINTF("tdarchipelago_open(): Cannot initialize xseg.\n");
+        retval = -EFAULT;
         goto err_exit;
     }
     prv->xseg = xseg_join((char *)XSEG_TYPENAME, prv->segment_name, (char *)XSEG_PEERTYPENAME, NULL);
     if(!prv->xseg) {
         DPRINTF("tdarchipelago_open(): Cannot join segment.\n");
+        retval = -EFAULT;
         goto err_exit;
     }
 
     prv->port = xseg_bind_dynport(prv->xseg);
     if(!prv->port) {
         DPRINTF("tdarchipelago_open(): Failed to bind port.\n");
+        xseg_leave(prv->xseg);
+        retval = -EFAULT;
         goto err_exit;
     }
     prv->srcport = prv->port->portno;
     xseg_init_local_signal(prv->xseg, prv->srcport);
 
     prv->size = get_image_info(prv);
+    if(prv->size < 0) {
+        xseg_quit_local_signal(s->xseg, s->srcport);
+        xseg_leave_dynport(prv->xseg, prv->port);
+        xseg_leave(prv->xseg);
+        retval = -EIO;
+        goto err_exit;
+    }
     size = prv->size;
 
     driver->info.sector_size = DEFAULT_SECTOR_SIZE;
@@ -442,7 +454,6 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     return 0;
 
 err_exit:
-    tdarchipelago_close(driver);
     return retval;
 }
 
@@ -500,6 +511,7 @@ static int tdarchipelago_close(td_driver_t *driver)
     xseg_put_request(prv->xseg, req, prv->srcport);
 
 err_exit:
+    xseg_quit_local_signal(s->xseg, s->srcport);
     xseg_leave_dynport(prv->xseg, prv->port);
     xseg_leave(prv->xseg);
     return 0;
