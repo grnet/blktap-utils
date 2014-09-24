@@ -242,7 +242,7 @@ static void xseg_request_handler(void *data)
     pthread_exit(NULL);
 }
 
-static uint64_t get_image_info(struct tdarchipelago_data *td)
+static int get_image_info(struct tdarchipelago_data *td)
 {
     uint64_t size;
     int r;
@@ -253,7 +253,7 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     if(r < 0) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot prepare request. Aborting...");
-        return -1;
+        goto err_exit;
     }
 
     char *target = xseg_get_target(td->xseg, req);
@@ -267,19 +267,23 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     if(p == NoPort) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot submit request. Aborting...");
-        return -1;
+        goto err_exit;
     }
     xseg_signal(td->xseg, p);
     r = wait_reply(td, req);
     if(r) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): wait_reply() error. Aborting...");
-        return -1;
+        goto err_exit;
     }
     struct xseg_reply_info *xinfo = (struct xseg_reply_info *) xseg_get_data(td->xseg, req);
     size = xinfo->size;
     xseg_put_request(td->xseg, req, td->srcport);
-    return size;
+    td->size = size;
+    return 0;
+
+err_exit:
+    return -EIO;
 }
 
 static void xseg_find_port(char *pstr, const char *needle, xport *port)
@@ -353,7 +357,6 @@ static void parse_uri(struct tdarchipelago_data *prv, const char *s)
 static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t flags)
 {
     struct tdarchipelago_data *prv = driver->data;
-    uint64_t size; /*Archipelago Volume Size*/
     int i, retval;
 
     /* Init private structure */
@@ -422,18 +425,16 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     prv->srcport = prv->port->portno;
     xseg_init_local_signal(prv->xseg, prv->srcport);
 
-    prv->size = get_image_info(prv);
-    if(prv->size < 0) {
-        xseg_quit_local_signal(s->xseg, s->srcport);
+    retval = get_image_info(prv);
+    if(retval < 0) {
+        xseg_quit_local_signal(prv->xseg, prv->srcport);
         xseg_leave_dynport(prv->xseg, prv->port);
         xseg_leave(prv->xseg);
-        retval = -EIO;
         goto err_exit;
     }
-    size = prv->size;
 
     driver->info.sector_size = DEFAULT_SECTOR_SIZE;
-    driver->info.size = size >> SECTOR_SHIFT;
+    driver->info.size = prv->size >> SECTOR_SHIFT;
     driver->info.info = 0;
 
     /* Start XSEG Request Handler Threads */
@@ -511,7 +512,7 @@ static int tdarchipelago_close(td_driver_t *driver)
     xseg_put_request(prv->xseg, req, prv->srcport);
 
 err_exit:
-    xseg_quit_local_signal(s->xseg, s->srcport);
+    xseg_quit_local_signal(prv->xseg, prv->srcport);
     xseg_leave_dynport(prv->xseg, prv->port);
     xseg_leave(prv->xseg);
     return 0;
