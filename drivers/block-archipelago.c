@@ -535,6 +535,8 @@ err_exit:
     xseg_quit_local_signal(prv->xseg, prv->srcport);
     xseg_leave_dynport(prv->xseg, prv->port);
     xseg_leave(prv->xseg);
+    free(prv->segment_name);
+    free(prv->volname);
     return 0;
 }
 
