@@ -417,7 +417,7 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
         retval = -EFAULT;
         goto err_exit;
     }
-    prv->xseg = xseg_join((char *)XSEG_TYPENAME, prv->segment_name, (char *)XSEG_PEERTYPENAME, NULL);
+    prv->xseg = xseg_join(XSEG_TYPENAME, prv->segment_name, XSEG_PEERTYPENAME, NULL);
     if(!prv->xseg) {
         DPRINTF("tdarchipelago_open(): Cannot join segment.\n");
         retval = -EFAULT;
