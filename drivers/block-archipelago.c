@@ -87,9 +87,12 @@ typedef struct AIORequestData {
 typedef struct ArchipelagoThread {
     pthread_t request_th;
     pthread_cond_t request_cond;
+    pthread_cond_t init_done_cond;
     pthread_mutex_t request_mutex;
+    pthread_mutex_t init_done_mutex;
     bool is_signaled;
     bool is_running;
+    bool init_done;
 } ArchipelagoThread;
 
 
@@ -203,6 +206,12 @@ static void xseg_request_handler(void *data)
     struct tdarchipelago_data *th_data = (struct tdarchipelago_data *) data;
     void *psd = xseg_get_signal_desc(th_data->xseg, th_data->port);
     ArchipelagoThread *th = th_data->io_thread;
+
+    pthread_mutex_lock(&th->init_done_mutex);
+    th->init_done = true;
+    pthread_cond_signal(&th->init_done_cond);
+    pthread_mutex_unlock(&th->init_done_mutex);
+
     pthread_mutex_lock(&th->request_mutex);
     while(th->is_running) {
         struct xseg_request *req;
@@ -236,7 +245,7 @@ static void xseg_request_handler(void *data)
         }
         xseg_cancel_wait(th_data->xseg, th_data->srcport);
     }
-    th->is_signaled = 1;
+    th->is_signaled = true;
     pthread_cond_signal(&th->request_cond);
     pthread_mutex_unlock(&th->request_mutex);
     pthread_exit(NULL);
@@ -445,12 +454,22 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     prv->io_thread = (ArchipelagoThread *) malloc(sizeof(ArchipelagoThread));
 
     pthread_cond_init(&prv->io_thread->request_cond, NULL);
+    pthread_cond_init(&prv->io_thread->init_done_cond, NULL);
     pthread_mutex_init(&prv->io_thread->request_mutex, NULL);
-    prv->io_thread->is_signaled = 0;
-    prv->io_thread->is_running = 1;
+    pthread_mutex_init(&prv->io_thread->init_done_mutex, NULL);
+    prv->io_thread->is_signaled = false;
+    prv->io_thread->is_running = true;
+    prv->io_thread->init_done = false;
     pthread_create(&prv->io_thread->request_th, &attr,
             (void *) xseg_request_handler,
             (void *) prv);
+
+    pthread_mutex_lock(&prv->io_thread->init_done_mutex);
+    while (!prv->io_thread->init_done) {
+        pthread_cond_wait(&prv->io_thread->init_done_cond,
+                          &prv->io_thread->init_done_mutex);
+    }
+    pthread_mutex_unlock(&prv->io_thread->init_done_mutex);
 
     return 0;
 
