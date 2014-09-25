@@ -470,6 +470,7 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
                           &prv->io_thread->init_done_mutex);
     }
     pthread_mutex_unlock(&prv->io_thread->init_done_mutex);
+    pthread_attr_destroy(&attr);
 
     return 0;
 
