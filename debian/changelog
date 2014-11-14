@@ -1,0 +1,36 @@
+blktap-archipelago (2.1-1~wheezy) wheezy; urgency=low
+
+  * New upstream version
+
+ -- Filippos Giannakos <philipgian@grnet.gr>  Mon, 10 Nov 2014 16:59:24 +0200
+
+blktap-archipelago (2.1~rc2-1~wheezy) wheezy; urgency=low
+
+  * New upstream version 
+
+ -- Filippos Giannakos <philipgian@grnet.gr>  Wed, 15 Oct 2014 12:35:32 +0300
+
+blktap-archipelago (2.1~rc1-1~wheezy) wheezy; urgency=low
+
+  * New upstream version
+
+ -- Filippos Giannakos <philipgian@grnet.gr>  Mon, 08 Sep 2014 17:59:37 +0300
+
+blktap-archipelago (2.0.90-2) unstable; urgency=low
+
+  * Add Archipelago support
+  * Update debian/control
+        - Update to S-V 3.9.5
+  * Lintian cleaning
+  * Add devflow support
+
+ -- Chrysostomos Nanakos <cnanakos@grnet.gr>  Wed, 19 Feb 2014 13:03:39 +0200
+
+blktap-archipelago (2.0.90-1) unstable; urgency=low
+
+  * Initial release. (Closes: #635115)
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 21 Jul 2011 17:08:44 +0000
+
+
+
