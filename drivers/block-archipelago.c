@@ -87,9 +87,12 @@ typedef struct AIORequestData {
 typedef struct ArchipelagoThread {
     pthread_t request_th;
     pthread_cond_t request_cond;
+    pthread_cond_t init_done_cond;
     pthread_mutex_t request_mutex;
+    pthread_mutex_t init_done_mutex;
     bool is_signaled;
     bool is_running;
+    bool init_done;
 } ArchipelagoThread;
 
 
@@ -203,6 +206,12 @@ static void xseg_request_handler(void *data)
     struct tdarchipelago_data *th_data = (struct tdarchipelago_data *) data;
     void *psd = xseg_get_signal_desc(th_data->xseg, th_data->port);
     ArchipelagoThread *th = th_data->io_thread;
+
+    pthread_mutex_lock(&th->init_done_mutex);
+    th->init_done = true;
+    pthread_cond_signal(&th->init_done_cond);
+    pthread_mutex_unlock(&th->init_done_mutex);
+
     pthread_mutex_lock(&th->request_mutex);
     while(th->is_running) {
         struct xseg_request *req;
@@ -236,13 +245,13 @@ static void xseg_request_handler(void *data)
         }
         xseg_cancel_wait(th_data->xseg, th_data->srcport);
     }
-    th->is_signaled = 1;
+    th->is_signaled = true;
     pthread_cond_signal(&th->request_cond);
     pthread_mutex_unlock(&th->request_mutex);
     pthread_exit(NULL);
 }
 
-static uint64_t get_image_info(struct tdarchipelago_data *td)
+static int get_image_info(struct tdarchipelago_data *td)
 {
     uint64_t size;
     int r;
@@ -253,7 +262,7 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     if(r < 0) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot prepare request. Aborting...");
-        exit(-1);
+        goto err_exit;
     }
 
     char *target = xseg_get_target(td->xseg, req);
@@ -267,19 +276,23 @@ static uint64_t get_image_info(struct tdarchipelago_data *td)
     if(p == NoPort) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot submit request. Aborting...");
-        exit(-1);
+        goto err_exit;
     }
     xseg_signal(td->xseg, p);
     r = wait_reply(td, req);
     if(r) {
         xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): wait_reply() error. Aborting...");
-        exit(-1);
+        goto err_exit;
     }
     struct xseg_reply_info *xinfo = (struct xseg_reply_info *) xseg_get_data(td->xseg, req);
     size = xinfo->size;
     xseg_put_request(td->xseg, req, td->srcport);
-    return size;
+    td->size = size;
+    return 0;
+
+err_exit:
+    return -EIO;
 }
 
 static void xseg_find_port(char *pstr, const char *needle, xport *port)
@@ -353,7 +366,6 @@ static void parse_uri(struct tdarchipelago_data *prv, const char *s)
 static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t flags)
 {
     struct tdarchipelago_data *prv = driver->data;
-    uint64_t size; /*Archipelago Volume Size*/
     int i, retval;
 
     /* Init private structure */
@@ -389,6 +401,7 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     retval = pipe(prv->pipe_fds);
     if(retval) {
         DPRINTF("tdarchipelago_open(): Failed to create inter-thread pipe (%d)\n", retval);
+        retval = -errno;
         goto err_exit;
     }
     prv->pipe_event_id = tapdisk_server_register_event(
@@ -401,27 +414,36 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     /* Archipelago context */
     if(xseg_initialize()) {
         DPRINTF("tdarchipelago_open(): Cannot initialize xseg.\n");
+        retval = -EFAULT;
         goto err_exit;
     }
-    prv->xseg = xseg_join((char *)XSEG_TYPENAME, prv->segment_name, (char *)XSEG_PEERTYPENAME, NULL);
+    prv->xseg = xseg_join(XSEG_TYPENAME, prv->segment_name, XSEG_PEERTYPENAME, NULL);
     if(!prv->xseg) {
         DPRINTF("tdarchipelago_open(): Cannot join segment.\n");
+        retval = -EFAULT;
         goto err_exit;
     }
 
     prv->port = xseg_bind_dynport(prv->xseg);
     if(!prv->port) {
         DPRINTF("tdarchipelago_open(): Failed to bind port.\n");
+        xseg_leave(prv->xseg);
+        retval = -EFAULT;
         goto err_exit;
     }
     prv->srcport = prv->port->portno;
     xseg_init_local_signal(prv->xseg, prv->srcport);
 
-    prv->size = get_image_info(prv);
-    size = prv->size;
+    retval = get_image_info(prv);
+    if(retval < 0) {
+        xseg_quit_local_signal(prv->xseg, prv->srcport);
+        xseg_leave_dynport(prv->xseg, prv->port);
+        xseg_leave(prv->xseg);
+        goto err_exit;
+    }
 
     driver->info.sector_size = DEFAULT_SECTOR_SIZE;
-    driver->info.size = size >> SECTOR_SHIFT;
+    driver->info.size = prv->size >> SECTOR_SHIFT;
     driver->info.info = 0;
 
     /* Start XSEG Request Handler Threads */
@@ -432,17 +454,27 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     prv->io_thread = (ArchipelagoThread *) malloc(sizeof(ArchipelagoThread));
 
     pthread_cond_init(&prv->io_thread->request_cond, NULL);
+    pthread_cond_init(&prv->io_thread->init_done_cond, NULL);
     pthread_mutex_init(&prv->io_thread->request_mutex, NULL);
-    prv->io_thread->is_signaled = 0;
-    prv->io_thread->is_running = 1;
+    pthread_mutex_init(&prv->io_thread->init_done_mutex, NULL);
+    prv->io_thread->is_signaled = false;
+    prv->io_thread->is_running = true;
+    prv->io_thread->init_done = false;
     pthread_create(&prv->io_thread->request_th, &attr,
             (void *) xseg_request_handler,
             (void *) prv);
 
+    pthread_mutex_lock(&prv->io_thread->init_done_mutex);
+    while (!prv->io_thread->init_done) {
+        pthread_cond_wait(&prv->io_thread->init_done_cond,
+                          &prv->io_thread->init_done_mutex);
+    }
+    pthread_mutex_unlock(&prv->io_thread->init_done_mutex);
+    pthread_attr_destroy(&attr);
+
     return 0;
 
 err_exit:
-    tdarchipelago_close(driver);
     return retval;
 }
 
@@ -500,8 +532,11 @@ static int tdarchipelago_close(td_driver_t *driver)
     xseg_put_request(prv->xseg, req, prv->srcport);
 
 err_exit:
+    xseg_quit_local_signal(prv->xseg, prv->srcport);
     xseg_leave_dynport(prv->xseg, prv->port);
     xseg_leave(prv->xseg);
+    free(prv->segment_name);
+    free(prv->volname);
     return 0;
 }
 
