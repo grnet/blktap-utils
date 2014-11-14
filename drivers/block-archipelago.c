@@ -52,9 +52,16 @@
 #include "config.h"
 #endif
 
-#define MAX_ARCHIPELAGO_REQS    TAPDISK_DATA_REQUESTS
+#define MAX_ARCHIPELAGO_REQS        TAPDISK_DATA_REQUESTS
 #define MAX_ARCHIPELAGO_MERGED_REQS 32
-#define NUM_XSEG_THREADS 2
+#define MAX_MERGE_SIZE              524288
+
+#define XSEG_TYPENAME               "posix"
+#define XSEG_NAME                   "archipelago"
+#define XSEG_PEERTYPENAME           "posixfd"
+
+#define ARCHIPELAGO_DFL_MPORT       1001
+#define ARCHIPELAGO_DFL_VPORT       501
 
 struct tdarchipelago_request {
     td_request_t treq[MAX_ARCHIPELAGO_MERGED_REQS];
@@ -71,29 +78,41 @@ typedef struct AIORequestData {
     char *volname;
     off_t offset;
     ssize_t size;
-    char *buf;
+    void *buf;
     int ret;
     int op;
     struct tdarchipelago_request *tdreq;
 } AIORequestData;
 
+typedef struct ArchipelagoThread {
+    pthread_t request_th;
+    pthread_cond_t request_cond;
+    pthread_cond_t init_done_cond;
+    pthread_mutex_t request_mutex;
+    pthread_mutex_t init_done_mutex;
+    bool is_signaled;
+    bool is_running;
+    bool init_done;
+} ArchipelagoThread;
 
-struct xseg *xseg = NULL;
-xport srcport = NoPort;
-struct xseg_port *port;
-xport mportno = NoPort;
-xport vportno = NoPort;
-
-struct posixfd_signal_desc {
-    char signal_file[sizeof(void *)];
-    int fd;
-    int flag;
-};
 
 struct tdarchipelago_data {
-    /* Archipelago Volume Name and Size */
+    /* Archipelago Volume Name,segment name and Size */
     char *volname;
-    ssize_t size;
+    char *segment_name;
+    uint64_t size;
+
+    /* Archipelago specific */
+    struct xseg *xseg;
+    struct xseg_port *port;
+    xport srcport;
+    xport mportno;
+    xport vportno;
+    bool assume_v0;
+    uint64_t v0_size;
+
+    /* Archipelago I/O Thread */
+    ArchipelagoThread *io_thread;
 
     /* Requests Queue */
     struct list_head reqs_inflight;
@@ -126,114 +145,154 @@ struct tdarchipelago_data {
     } stat;
 };
 
-typedef struct ArchipelagoThread {
-    pthread_t request_th;
-    pthread_cond_t request_cond;
-    pthread_mutex_t request_mutex;
-    int is_signaled;
-    int is_running;
-} ArchipelagoThread;
 
-ArchipelagoThread archipelago_th[NUM_XSEG_THREADS];
-
-static void tdarchipelago_finish_aiocb(void *arg, ssize_t c, AIORequestData *reqdata);
+static void tdarchipelago_finish_aiocb(AIORequestData *reqdata);
 static int tdarchipelago_close(td_driver_t *driver);
 static void tdarchipelago_pipe_read_cb(event_id_t eb, char mode, void *data);
 
-static int wait_reply(struct xseg_request *expected_req)
+static int strstart(const char *str, const char *val, const char **ptr)
 {
-    struct xseg_request *rec;
-    xseg_prepare_wait(xseg, srcport);
-    struct posixfd_signal_desc *psd = xseg_get_signal_desc(xseg, port);
+    const char *p, *q;
+    p = str;
+    q = val;
+    while (*q != '\0') {
+        if (*p != *q)
+            return 0;
+        p++;
+        q++;
+    }
+    if (ptr)
+        *ptr = p;
+    return 1;
+}
+
+static void req_fix_v0(struct tdarchipelago_data *prv, struct xseg_request *req)
+{
+    if (!prv->assume_v0) {
+        return;
+    }
+    req->flags |= XF_ASSUMEV0;
+    if (prv->v0_size != -1) {
+        req->v0_size = prv->v0_size;
+    }
+}
+
+static int wait_reply(struct tdarchipelago_data *prv, struct xseg_request *expected_req)
+{
+    struct xseg_request *req;
+    xseg_prepare_wait(prv->xseg, prv->srcport);
+    void *psd = xseg_get_signal_desc(prv->xseg, prv->port);
     while(1) {
-        rec = xseg_receive(xseg, srcport, 0);
-        if(rec) {
-            if( rec != expected_req) {
+        req = xseg_receive(prv->xseg, prv->srcport, X_NONBLOCK);
+        if(req) {
+            if( req != expected_req) {
                 DPRINTF("wait_reply(): Unknown request.\n");
-                xseg_put_request(xseg, rec, srcport);
-            } else if(!(rec->state & XS_SERVED)) {
+                xseg_put_request(prv->xseg, req, prv->srcport);
+            } else if(!(req->state & XS_SERVED)) {
                 DPRINTF("wait_reply(): Failed request.\n");
                 return -1;
             } else {
                 break;
             }
         }
-        xseg_wait_signal(xseg, psd, 1000000UL);
+        xseg_wait_signal(prv->xseg, psd, 1000000UL);
     }
-    xseg_cancel_wait(xseg, srcport);
+    xseg_cancel_wait(prv->xseg, prv->srcport);
     return 0;
 }
 
-static void xseg_request_handler(void *arthd)
+static void xseg_request_handler(void *data)
 {
-    struct posixfd_signal_desc *psd = xseg_get_signal_desc(xseg, port);
-    ArchipelagoThread *th = (ArchipelagoThread *) arthd;
+    struct tdarchipelago_data *th_data = (struct tdarchipelago_data *) data;
+    void *psd = xseg_get_signal_desc(th_data->xseg, th_data->port);
+    ArchipelagoThread *th = th_data->io_thread;
+
+    pthread_mutex_lock(&th->init_done_mutex);
+    th->init_done = true;
+    pthread_cond_signal(&th->init_done_cond);
+    pthread_mutex_unlock(&th->init_done_mutex);
+
+    pthread_mutex_lock(&th->request_mutex);
     while(th->is_running) {
         struct xseg_request *req;
-        xseg_prepare_wait(xseg, srcport);
-        req = xseg_receive(xseg, srcport, 0);
+        xseg_prepare_wait(th_data->xseg, th_data->srcport);
+        req = xseg_receive(th_data->xseg, th_data->srcport, X_NONBLOCK);
         if(req) {
             AIORequestData *reqdata;
-            xseg_get_req_data(xseg, req, (void **)&reqdata);
+            xseg_get_req_data(th_data->xseg, req, (void **)&reqdata);
+
+            if (!(req->state & XS_SERVED)) {
+                reqdata->ret = -1;
+                tdarchipelago_finish_aiocb(reqdata);
+                xseg_put_request(th_data->xseg, req, th_data->srcport);
+                continue;
+            }
+
             if(reqdata->op == TD_OP_READ)
             {
-                char *data = xseg_get_data(xseg, req);
+                void *data = xseg_get_data(th_data->xseg, req);
                 memcpy(reqdata->buf, data, req->serviced);
-                int serviced = req->serviced;
-                tdarchipelago_finish_aiocb(reqdata->tdreq, serviced, reqdata);
-                xseg_put_request(xseg, req, srcport);
+                reqdata->ret = req->serviced;
+                tdarchipelago_finish_aiocb(reqdata);
+                xseg_put_request(th_data->xseg, req, th_data->srcport);
             } else if(reqdata->op == TD_OP_WRITE) {
-                int serviced = req->serviced;
-                tdarchipelago_finish_aiocb(reqdata->tdreq, serviced, reqdata);
-                xseg_put_request(xseg, req, srcport);
+                reqdata->ret = req->serviced;
+                tdarchipelago_finish_aiocb(reqdata);
+                xseg_put_request(th_data->xseg, req, th_data->srcport);
             }
         } else {
-            xseg_wait_signal(xseg, psd, 1000000UL);
+            xseg_wait_signal(th_data->xseg, psd, 1000000UL);
         }
-        xseg_cancel_wait(xseg, srcport);
+        xseg_cancel_wait(th_data->xseg, th_data->srcport);
     }
-    th->is_signaled = 1;
+    th->is_signaled = true;
     pthread_cond_signal(&th->request_cond);
+    pthread_mutex_unlock(&th->request_mutex);
     pthread_exit(NULL);
 }
 
-static uint64_t get_image_info(char *volname)
+static int get_image_info(struct tdarchipelago_data *td)
 {
     uint64_t size;
     int r;
 
-    int targetlen = strlen(volname);
-    struct xseg_request *req = xseg_get_request(xseg, srcport, mportno, X_ALLOC);
-    r = xseg_prep_request(xseg, req, targetlen, sizeof(struct xseg_reply_info));
+    int targetlen = strlen(td->volname);
+    struct xseg_request *req = xseg_get_request(td->xseg, td->srcport, td->mportno, X_ALLOC);
+    r = xseg_prep_request(td->xseg, req, targetlen, sizeof(struct xseg_reply_info));
     if(r < 0) {
-        xseg_put_request(xseg, req, srcport);
+        xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot prepare request. Aborting...");
-        exit(-1);
+        goto err_exit;
     }
 
-    char *target = xseg_get_target(xseg, req);
-    strncpy(target, volname, targetlen);
+    char *target = xseg_get_target(td->xseg, req);
+    memcpy(target, td->volname, targetlen);
     req->size = req->datalen;
     req->offset = 0;
     req->op = X_INFO;
+    req_fix_v0(td, req);
 
-    xport p = xseg_submit(xseg, req, srcport, X_ALLOC);
+    xport p = xseg_submit(td->xseg, req, td->srcport, X_ALLOC);
     if(p == NoPort) {
-        xseg_put_request(xseg, req, srcport);
+        xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): Cannot submit request. Aborting...");
-        exit(-1);
+        goto err_exit;
     }
-    xseg_signal(xseg, p);
-    r = wait_reply(req);
+    xseg_signal(td->xseg, p);
+    r = wait_reply(td, req);
     if(r) {
-        xseg_put_request(xseg, req, srcport);
+        xseg_put_request(td->xseg, req, td->srcport);
         DPRINTF("get_image_info(): wait_reply() error. Aborting...");
-        exit(-1);
+        goto err_exit;
     }
-    struct xseg_reply_info *xinfo = (struct xseg_reply_info *) xseg_get_data(xseg, req);
+    struct xseg_reply_info *xinfo = (struct xseg_reply_info *) xseg_get_data(td->xseg, req);
     size = xinfo->size;
-    xseg_put_request(xseg, req, srcport);
-    return size;
+    xseg_put_request(td->xseg, req, td->srcport);
+    td->size = size;
+    return 0;
+
+err_exit:
+    return -EIO;
 }
 
 static void xseg_find_port(char *pstr, const char *needle, xport *port)
@@ -245,21 +304,41 @@ static void xseg_find_port(char *pstr, const char *needle, xport *port)
     free(dpstr);
 }
 
-static void parse_uri(char **volname, const char *s)
+static void xseg_find_segment(char *pstr, const char *needle,
+                              char **segment_name)
+{
+    const char *a;
+    if (strstart(pstr, needle, &a)) {
+        if (strlen(a) > 0) {
+            *segment_name = strdup(a);
+        }
+    }
+}
+
+static void find_v0_size(char *size_str, const char *needle, uint64_t *size)
+{
+    char *a;
+    char *temp_str = strdup(size_str);
+    a = strtok(size_str, needle);
+    *size = (uint64_t) atol(a);
+    free(temp_str);
+}
+
+static void parse_uri(struct tdarchipelago_data *prv, const char *s)
 {
     int n=0, nn, i;
-    char *tokens[4];
+    char *tokens[7];
 
     char *ds = strdup(s);
     tokens[n] = strtok(ds, ":");
-    *volname = malloc(strlen(tokens[n]) + 1);
-    strcpy(*volname, tokens[n]);
+    prv->volname = malloc(strlen(tokens[n]) + 1);
+    strcpy(prv->volname, tokens[n]);
 
     for(i = 0, nn = 0; s[i]; i++)
         nn += (s[i] == ':');
     /* FIXME: Protect tokens array overflow */
-    if( nn > 3)
-        i = 3;
+    if( nn > 6)
+        i = 6;
     else
         i = nn;
 
@@ -267,24 +346,36 @@ static void parse_uri(char **volname, const char *s)
 
     for(nn = 0; nn <= i; nn++) {
         if(strstr(tokens[nn], "mport="))
-            xseg_find_port(tokens[nn], "mport=", &mportno);
+            xseg_find_port(tokens[nn], "mport=", &prv->mportno);
         if(strstr(tokens[nn], "vport="))
-            xseg_find_port(tokens[nn], "vport=", &vportno);
+            xseg_find_port(tokens[nn], "vport=", &prv->vportno);
+        if(strstr(tokens[nn], "assume_v0"))
+            prv->assume_v0 = 1;
+        if(strstr(tokens[nn], "v0_size="))
+            find_v0_size(tokens[nn], "v0_size=", &prv->v0_size);
+        if(strstr(tokens[nn], "segment="))
+            xseg_find_segment(tokens[nn], "segment=", &prv->segment_name);
+    }
+
+    if(!prv->assume_v0 && prv->v0_size != -1) {
+        DPRINTF("archipelago_parse_uri(): Ignoring provided v0_size\n");
+        prv->v0_size = -1;
     }
 }
 
 static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t flags)
 {
     struct tdarchipelago_data *prv = driver->data;
-    uint64_t size; /*Archipelago Volume Size*/
     int i, retval;
 
     /* Init private structure */
     memset(prv, 0x00, sizeof(struct tdarchipelago_data));
 
     /*Default mapperd and vlmcd ports */
-    vportno = 501;
-    mportno = 1001;
+    prv->vportno = ARCHIPELAGO_DFL_VPORT;
+    prv->mportno = ARCHIPELAGO_DFL_MPORT;
+    prv->assume_v0 = 0;
+    prv->v0_size = -1;
 
     INIT_LIST_HEAD(&prv->reqs_inflight);
     INIT_LIST_HEAD(&prv->reqs_free);
@@ -300,12 +391,17 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
     prv->timeout_event_id = -1;
 
     /* Parse Archipelago Volume Name and XSEG mportno, vportno */
-    parse_uri(&prv->volname, name);
+    parse_uri(prv, name);
+
+    if (!prv->segment_name) {
+        prv->segment_name = strdup(XSEG_NAME);
+    }
 
     /* Inter-thread pipe setup */
     retval = pipe(prv->pipe_fds);
     if(retval) {
         DPRINTF("tdarchipelago_open(): Failed to create inter-thread pipe (%d)\n", retval);
+        retval = -errno;
         goto err_exit;
     }
     prv->pipe_event_id = tapdisk_server_register_event(
@@ -316,72 +412,76 @@ static int tdarchipelago_open(td_driver_t *driver, const char *name, td_flag_t f
             prv);
 
     /* Archipelago context */
-    if(!xseg) {
-        if(xseg_initialize()) {
-            DPRINTF("tdarchipelago_open(): Cannot initialize xseg.\n");
-            goto err_exit;
-        }
+    if(xseg_initialize()) {
+        DPRINTF("tdarchipelago_open(): Cannot initialize xseg.\n");
+        retval = -EFAULT;
+        goto err_exit;
     }
-    xseg = xseg_join((char *)"segdev", (char *)"xsegbd", (char *)"posixfd", NULL);
-    if(!xseg) {
+    prv->xseg = xseg_join(XSEG_TYPENAME, prv->segment_name, XSEG_PEERTYPENAME, NULL);
+    if(!prv->xseg) {
         DPRINTF("tdarchipelago_open(): Cannot join segment.\n");
+        retval = -EFAULT;
         goto err_exit;
     }
 
-    port = xseg_bind_dynport(xseg);
-    if(!port) {
+    prv->port = xseg_bind_dynport(prv->xseg);
+    if(!prv->port) {
         DPRINTF("tdarchipelago_open(): Failed to bind port.\n");
+        xseg_leave(prv->xseg);
+        retval = -EFAULT;
         goto err_exit;
     }
-    srcport = port->portno;
-    xseg_init_local_signal(xseg, srcport);
+    prv->srcport = prv->port->portno;
+    xseg_init_local_signal(prv->xseg, prv->srcport);
 
-    prv->size = get_image_info(prv->volname);
-    size = prv->size;
+    retval = get_image_info(prv);
+    if(retval < 0) {
+        xseg_quit_local_signal(prv->xseg, prv->srcport);
+        xseg_leave_dynport(prv->xseg, prv->port);
+        xseg_leave(prv->xseg);
+        goto err_exit;
+    }
 
     driver->info.sector_size = DEFAULT_SECTOR_SIZE;
-    driver->info.size = size >> SECTOR_SHIFT;
+    driver->info.size = prv->size >> SECTOR_SHIFT;
     driver->info.info = 0;
 
     /* Start XSEG Request Handler Threads */
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    for(i=0; i< NUM_XSEG_THREADS; i++) {
-        pthread_cond_init(&archipelago_th[i].request_cond, NULL);
-        pthread_mutex_init(&archipelago_th[i].request_mutex, NULL);
-        archipelago_th[i].is_signaled = 0;
-        archipelago_th[i].is_running = 1;
-        pthread_create(&archipelago_th[i].request_th, &attr,
-                (void *) xseg_request_handler,
-                (void *)&archipelago_th[i]);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
+    prv->io_thread = (ArchipelagoThread *) malloc(sizeof(ArchipelagoThread));
+
+    pthread_cond_init(&prv->io_thread->request_cond, NULL);
+    pthread_cond_init(&prv->io_thread->init_done_cond, NULL);
+    pthread_mutex_init(&prv->io_thread->request_mutex, NULL);
+    pthread_mutex_init(&prv->io_thread->init_done_mutex, NULL);
+    prv->io_thread->is_signaled = false;
+    prv->io_thread->is_running = true;
+    prv->io_thread->init_done = false;
+    pthread_create(&prv->io_thread->request_th, &attr,
+            (void *) xseg_request_handler,
+            (void *) prv);
+
+    pthread_mutex_lock(&prv->io_thread->init_done_mutex);
+    while (!prv->io_thread->init_done) {
+        pthread_cond_wait(&prv->io_thread->init_done_cond,
+                          &prv->io_thread->init_done_mutex);
     }
+    pthread_mutex_unlock(&prv->io_thread->init_done_mutex);
+    pthread_attr_destroy(&attr);
+
     return 0;
 
 err_exit:
-    tdarchipelago_close(driver);
     return retval;
 }
 
 static int tdarchipelago_close(td_driver_t *driver)
 {
     struct tdarchipelago_data *prv = driver->data;
-    int i;
-
-    for(i=0; i<NUM_XSEG_THREADS; i++) {
-        if(archipelago_th[i].is_running) {
-            archipelago_th[i].is_running = 0;
-            pthread_mutex_lock(&archipelago_th[i].request_mutex);
-            if(!archipelago_th[i].is_signaled)
-                pthread_cond_wait(&archipelago_th[i].request_cond, &archipelago_th[i].request_mutex);
-            pthread_mutex_unlock(&archipelago_th[i].request_mutex);
-            pthread_cond_destroy(&archipelago_th[i].request_cond);
-            pthread_mutex_destroy(&archipelago_th[i].request_mutex);
-        }
-    }
-    xseg_leave_dynport(xseg, port);
-    xseg_leave(xseg);
+    int r, targetlen;
 
     if(prv->pipe_fds[0] >= 0) {
         close(prv->pipe_fds[0]);
@@ -391,16 +491,62 @@ static int tdarchipelago_close(td_driver_t *driver)
     if(prv->pipe_event_id >= 0)
         tapdisk_server_unregister_event(prv->pipe_event_id);
 
+    prv->io_thread->is_running = 0;
+
+    pthread_mutex_lock(&prv->io_thread->request_mutex);
+    while(!prv->io_thread->is_signaled)
+        pthread_cond_wait(&prv->io_thread->request_cond, &prv->io_thread->request_mutex);
+    pthread_mutex_unlock(&prv->io_thread->request_mutex);
+    pthread_join(prv->io_thread->request_th, NULL);
+    pthread_cond_destroy(&prv->io_thread->request_cond);
+    pthread_mutex_destroy(&prv->io_thread->request_mutex);
+    free(prv->io_thread);
+
+    targetlen = strlen(prv->volname);
+    struct xseg_request *req = xseg_get_request(prv->xseg, prv->srcport, prv->vportno, X_ALLOC);
+    r = xseg_prep_request(prv->xseg, req, targetlen, 0);
+    if(r < 0) {
+        DPRINTF("tdarchipelago_close(): Cannot prepare close request.");
+        goto err_exit;
+    }
+
+    char *target = xseg_get_target(prv->xseg, req);
+    memcpy(target, prv->volname, targetlen);
+    req->size = req->datalen;
+    req->offset = 0;
+    req->op = X_CLOSE;
+    req_fix_v0(prv, req);
+
+    xport p = xseg_submit(prv->xseg, req, prv->srcport, X_ALLOC);
+    if(p == NoPort) {
+        xseg_put_request(prv->xseg, req, prv->srcport);
+        DPRINTF("tdarchipelago_close(): Cannot submit close request.");
+        goto err_exit;
+    }
+
+    xseg_signal(prv->xseg, p);
+    r = wait_reply(prv, req);
+    if(r < 0)
+        DPRINTF("tdarchipelago_close(): wait_reply() error.");
+
+    xseg_put_request(prv->xseg, req, prv->srcport);
+
+err_exit:
+    xseg_quit_local_signal(prv->xseg, prv->srcport);
+    xseg_leave_dynport(prv->xseg, prv->port);
+    xseg_leave(prv->xseg);
+    free(prv->segment_name);
+    free(prv->volname);
     return 0;
 }
 
-static void tdarchipelago_finish_aiocb(void *arg, ssize_t c, AIORequestData *reqdata)
+static void tdarchipelago_finish_aiocb(AIORequestData *reqdata)
 {
-    struct tdarchipelago_request *req = arg;
-    struct tdarchipelago_data *prv = req->treq[0].image->driver->data;
     int rv;
+    struct tdarchipelago_request *req = reqdata->tdreq;
+    struct tdarchipelago_data *prv = req->treq[0].image->driver->data;
 
-    req->result = c;
+    req->result = reqdata->ret;
 
     while(1) {
         rv = write(prv->pipe_fds[1], (void *)&req, sizeof(req));
@@ -452,119 +598,81 @@ static void tdarchipelago_pipe_read_cb(event_id_t eb, char mode, void *data)
     prv->reqs_free_count++;
 }
 
-static int archipelago_aio_read(char *volname, off_t offset, ssize_t size, char *buf,
-        struct tdarchipelago_request *tdreq)
+static int __archipelago_submit_request(struct tdarchipelago_data *prv,
+                                        struct tdarchipelago_request *tdreq)
 {
-    AIORequestData *reqdata = malloc(sizeof(AIORequestData));
     int retval;
-    int targetlen = strlen(volname);
-    struct xseg_request *req = xseg_get_request(xseg, srcport, vportno, X_ALLOC);
-    if(!req) {
-        DPRINTF("archipelago_aio_read(): Cannot get xseg request.\n");
-        retval = -1;
+    char *data, *target;
+    AIORequestData *reqdata;
+    int targetlen = strlen(prv->volname);
+
+    struct xseg_request *req = xseg_get_request(prv->xseg, prv->srcport, prv->vportno, X_ALLOC);
+    if (!req) {
+        DPRINTF("__archipelago_submit_request(): Cannot get xseg request.\n");
+        return -1;
+    }
+
+    retval = xseg_prep_request(prv->xseg, req, targetlen, tdreq->size);
+    if (retval < 0) {
+        DPRINTF("__archipelago_submit_request(): Cannot prepare xseg request.\n");
         goto err_exit;
     }
 
-    retval = xseg_prep_request(xseg, req, targetlen, size);
-    if(retval < 0) {
-        DPRINTF("archipelago_aio_read(): Cannot prepare xseg request.\n");
-        retval = -1;
+    target = xseg_get_target(prv->xseg, req);
+    if (!target) {
+        DPRINTF("__archipelago_submit_request(): Cannot get xseg target.\n");
         goto err_exit;
     }
-    char *target = xseg_get_target(xseg, req);
-    if(!target) {
-        DPRINTF("archipelago_aio_read(): Cannot get xseg target.\n");
-        retval = -1;
-        goto err_exit;
+
+    memcpy(target, prv->volname, targetlen);
+    req->size = tdreq->size;
+    req->offset = tdreq->offset;
+
+    switch (tdreq->op) {
+        case TD_OP_READ:
+            req->op = X_READ;
+            break;
+        case TD_OP_WRITE:
+            req->op = X_WRITE;
+            break;
     }
-    strncpy(target, volname, targetlen);
-    req->size = size;
-    req->offset = offset;
-    req->op = X_READ;
     req->flags |= XF_FLUSH;
+    req_fix_v0(prv, req);
 
-    reqdata->volname = volname;
-    reqdata->offset = offset;
-    reqdata->size = size;
-    reqdata->buf = buf;
-    reqdata->op = TD_OP_READ;
-    reqdata->tdreq = tdreq;
-
-    xseg_set_req_data(xseg, req, reqdata);
-    xport p = xseg_submit(xseg, req, srcport, X_ALLOC);
-    if(p == NoPort) {
-        DPRINTF("archipelago_aio_read(): Could not submit xseg request.\n");
-        retval = -1;
+    reqdata = (AIORequestData *) malloc(sizeof(AIORequestData));
+    if (!reqdata) {
+        DPRINTF("__archipelago_submit_request(): Cannot allocate reqdata.\n");
         goto err_exit;
     }
-    xseg_signal(xseg, p);
+
+    reqdata->volname= prv->volname;
+    reqdata->offset = tdreq->offset;
+    reqdata->size = tdreq->size;
+    reqdata->buf = tdreq->buf;
+    reqdata->tdreq = tdreq;
+    reqdata->op = tdreq->op;
+
+    xseg_set_req_data(prv->xseg, req, reqdata);
+    if (tdreq->op == TD_OP_WRITE) {
+        data = xseg_get_data(prv->xseg, req);
+        if(!data) {
+            DPRINTF("__archipelago_submit_request(): Cannot get xseg data.\n");
+            goto err_exit;
+        }
+        memcpy(data, tdreq->buf, tdreq->size);
+    }
+
+    xport p = xseg_submit(prv->xseg, req, prv->srcport, X_ALLOC);
+    if(p == NoPort) {
+        DPRINTF("__archipelago_submit_request(): Cannot submit xseg req.\n");
+        goto err_exit;
+    }
+    xseg_signal(prv->xseg, p);
     return 0;
 err_exit:
-    DPRINTF("archipelago_aio_read(): Read error: %d\n", retval);
-    xseg_put_request(xseg, req, srcport);
-    return retval;
-}
-
-static int archipelago_aio_write(char *volname, off_t offset, ssize_t size, char *buf,
-        struct tdarchipelago_request *tdreq)
-{
-    char *data = NULL;
-    int retval;
-    AIORequestData *reqdata = malloc(sizeof(AIORequestData));
-    int targetlen = strlen(volname);
-
-    struct xseg_request *req = xseg_get_request(xseg, srcport, vportno, X_ALLOC);
-    if(!req) {
-        DPRINTF("archipelago_aio_write(): Cannot get xseg request.\n");
-        retval = -1;
-        goto err_exit;
-    }
-    retval = xseg_prep_request(xseg, req, targetlen, size);
-    if( retval < 0) {
-        DPRINTF("archipelago_aio_write(): Cannot prepare xseg request.\n");
-        retval = -1;
-        goto err_exit;
-    }
-    char *target = xseg_get_target(xseg, req);
-    if(!target) {
-        DPRINTF("archipelago_aio_write(): Cannot get xseg target.\n");
-        retval = -1;
-        goto err_exit;
-    }
-    strncpy(target, volname, targetlen);
-    req->size = size;
-    req->offset = offset;
-    req->op = X_WRITE;
-    req->flags |= XF_FLUSH;
-
-    reqdata->volname= volname;
-    reqdata->offset = offset;
-    reqdata->size = size;
-    reqdata->buf = buf;
-    reqdata->op = TD_OP_WRITE;
-    reqdata->tdreq = tdreq;
-
-    xseg_set_req_data(xseg, req, reqdata);
-    data = xseg_get_data(xseg, req);
-    if(!data) {
-        DPRINTF("archipelago_aio_write(): Cannot get xseg data.\n");
-        retval = -1;
-        goto err_exit;
-    }
-
-    memcpy(data, buf, size);
-    xport p = xseg_submit(xseg, req, srcport, X_ALLOC);
-    if(p == NoPort) {
-        DPRINTF("archipelago_aio_write(): Cannot submit xseg req.\n");
-        retval = -1;
-        goto err_exit;
-    }
-    xseg_signal(xseg, p);
-    return 0;
-err_exit:
-    DPRINTF("archipelago_aio_write(): Write error: %d\n", retval);
-    xseg_put_request(xseg, req, srcport);
-    return retval;
+    DPRINTF("__archipelago_submit_request(): submit error\n");
+    xseg_put_request(prv->xseg, req, prv->srcport);
+    return -1;
 }
 
 static int tdarchipelago_submit_request(struct tdarchipelago_data *prv,
@@ -576,16 +684,14 @@ static int tdarchipelago_submit_request(struct tdarchipelago_data *prv,
 
     switch(req->op) {
         case TD_OP_READ:
-            retval = archipelago_aio_read(prv->volname, req->offset, req->size, req->buf, req);
-            break;
         case TD_OP_WRITE:
-            retval = archipelago_aio_write(prv->volname, req->offset, req->size, req->buf, req);
+            retval = __archipelago_submit_request(prv, req);
             break;
         default:
-            retval = - EINVAL;
+            retval = -EINVAL;
     }
 
-    if( retval < 0) {
+    if (retval < 0) {
         retval = -EIO;
         goto err;
     }
@@ -644,7 +750,7 @@ static void tdarchipelago_queue_request(td_driver_t *driver, td_request_t treq)
         }
 
         if(!merged || (size != (11 * 4096)) || //44k request
-                (dr->size >= 1024 * 1024) ||
+                (dr->size >= MAX_MERGE_SIZE) ||
                 (dr->treq_count == MAX_ARCHIPELAGO_MERGED_REQS))
         {
             tdarchipelago_submit_request(prv, dr);
@@ -677,7 +783,7 @@ static void tdarchipelago_queue_request(td_driver_t *driver, td_request_t treq)
         req->size = size;
         req->buf = treq.buf;
 
-        if ((size == (11 * 4096)) && (size < 1024 * 1024)) {
+        if ((size == (11 * 4096)) && (size < MAX_MERGE_SIZE)) {
             prv->req_deferred = req;
         } else {
             tdarchipelago_submit_request(prv, req);
@@ -725,7 +831,7 @@ static void tdarchipelago_stats(td_driver_t *driver, td_stats_t *st)
     tapdisk_stats_field(st, "req_miss_op", "d", prv->stat.req_miss_op);
     tapdisk_stats_field(st, "req_miss_ofs", "d", prv->stat.req_miss_ofs);
     tapdisk_stats_field(st, "req_miss_buf", "d", prv->stat.req_miss_buf);
-    tapdisk_stats_field(st, "max_merge_size", "d", 1024 * 1024);
+    tapdisk_stats_field(st, "max_merge_size", "d", MAX_MERGE_SIZE);
 }
 
 struct tap_disk tapdisk_archipelago = {

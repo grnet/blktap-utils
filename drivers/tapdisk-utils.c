@@ -254,8 +254,12 @@ int tapdisk_linux_version(void)
 		return -errno;
 
 	n = sscanf(uts.release, "%u.%u.%u", &version, &patchlevel, &sublevel);
-	if (n != 3)
-		return -ENOSYS;
+	if (n != 3) {
+		n = sscanf(uts.release, "%u.%u", &version, &patchlevel);
+		if (n != 2)
+			return -ENOSYS;
+		sublevel = 0;
+	}
 
 	return KERNEL_VERSION(version, patchlevel, sublevel);
 }
