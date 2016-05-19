@@ -14,7 +14,7 @@ Homepage: http://www.xen.org/products/cloudxen.html
 Package: blktap-archipelago-dev
 Section: devel
 Architecture: i386 amd64
-Depends: ${misc:Depends}, ${shlibs:Depends}, libvhd0-archipelago (= ${binary:Version}), libvhdio-archipelago-2.1.1 (= ${binary:Version}), libblktapctl0-archipelago (= ${binary:Version})
+Depends: ${misc:Depends}, ${shlibs:Depends}, libvhd0-archipelago (= ${binary:Version}), libvhdio-archipelago-@VERSION@ (= ${binary:Version}), libblktapctl0-archipelago (= ${binary:Version})
 Conflicts: blktap-dev
 Replaces: blktap-dev
 Description: Xen API blktap shared library (development files)
@@ -44,7 +44,7 @@ Section: utils
 Architecture: i386 amd64
 Depends: ${misc:Depends}, ${shlibs:Depends},
  libvhd0-archipelago (= ${binary:Version}),
- libvhdio-archipelago-2.1.1 (= ${binary:Version}),
+ libvhdio-archipelago-@VERSION@ (= ${binary:Version}),
  libblktapctl0-archipelago (= ${binary:Version}),
  blktap-dkms|blktap-dkms-bin, libxseg0(>=0.4), archipelago-protocol1
 Conflicts: blktap-utils
@@ -97,7 +97,7 @@ Description: VHD file format access library
  .
  This package contains the runtime vhd library.
 
-Package: libvhdio-archipelago-2.1.1
+Package: libvhdio-archipelago-@VERSION@
 Architecture: i386 amd64
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Conflicts: libvhdio-2.0.90

@@ -1,15 +1,23 @@
 #!/usr/bin/make -f
 
+VERSION = $(shell sed -r 's/m4_define\(\[BLKTAP_VERSION\], \[(.*)\]\)/\1/' version.m4)
+
 pkg_libvhd = libvhd0-archipelago
 vrs_libvhd = 0.1.1
 pkg_libvhdio = libvhdio2-archipelago
-vrs_libvhdio = 2.1rc1
+vrs_libvhdio = $(VERSION)
 pkg_libblktapctl = libblktapctl0-archipelago
 vrs_libblktapctl = 0.1.1
 
-
 %:
 	dh $@
+
+debian/control: version.m4 debian/control.in debian/libvhdio-archipelago-$(VERSION).install
+	sed -s 's|@VERSION[@]|$(VERSION)|g' debian/control.in > debian/control
+
+debian/libvhdio-archipelago-$(VERSION).install: debian/libvhdio-archipelago.install.in
+	rm -f debian/libvhdio-archipelago-*.install
+	cat debian/libvhdio-archipelago.install.in > $@
 
 override_dh_auto_clean:
 	[ ! -f Makefile ] || $(MAKE) distclean
@@ -21,7 +29,7 @@ override_dh_auto_clean:
 	rm -f vhd/vhd-util part/part-util vhd/vhd-util part/part-util
 	rm -f drivers/tapdisk2 drivers/tapdisk-stream drivers/lock-util drivers/td-util drivers/td-rated
 	rm -f vhd/vhd-update vhd/vhd-index
-	rm -f control/libblktapctl.so vhd/lib/libvhdio.so.1.0.0 vhd/lib/libvhd.so.1.0.0
+	rm -f control/libblktapctl.so vhd/lib/libvhdio.so.* vhd/lib/libvhd.so.*
 	find . -type f -iname '*.o' -delete
 	rm -f build-stamp
 	dh_clean
