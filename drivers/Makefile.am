@@ -80,4 +80,4 @@ libtapdisk_la_SOURCES += block-llcache.c
 libtapdisk_la_SOURCES += block-archipelago.c
 
 libtapdisk_la_LIBADD  = ../vhd/lib/libvhd.la
-libtapdisk_la_LIBADD += -laio -lxseg
+libtapdisk_la_LIBADD += -laio -lxseg -lpthread
