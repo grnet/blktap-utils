@@ -1,1 +1,1 @@
-m4_define([BLKTAP_VERSION], [m4_include(VERSION)])
+m4_define([BLKTAP_VERSION], [2.1.1])
