@@ -1,3 +1,9 @@
+blktap-archipelago (2.1.1-1~jessie) jessie; urgency=medium
+
+  * New upstream version
+
+ -- Nikos Skalkotos <skalkoto@grnet.gr>  Fri, 20 May 2016 12:08:02 +0300
+
 blktap-archipelago (2.1-1~wheezy) wheezy; urgency=low
 
   * New upstream version
@@ -31,6 +37,7 @@ blktap-archipelago (2.0.90-1) unstable; urgency=low
   * Initial release. (Closes: #635115)
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 21 Jul 2011 17:08:44 +0000
+
 
 
 
